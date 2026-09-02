@@ -1,0 +1,28 @@
+# Byte-compiled / optimized files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+*.egg
+
+# Virtual environments
+.env
+.venv
+env/
+venv/
+ENV/
+
+# Large model artifacts (automatically downloaded on first execution)
+*.task
+models/*.task
+marg_one/models/*.task
+
+# IDE and OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
