@@ -10,7 +10,7 @@ MARG-One is a modular robotics and intelligent computing framework designed for 
 
 The system integrates two core subsystems:
 1. **Vision Subsystem**: Real-time dual-hand tracking, 3D anatomical skeleton extraction, digit kinematic analysis, and extensible gesture-to-value mapping.
-2. **Control Subsystem**: Vision-based PC mouse cursor navigation driven by anatomical **Palm-Center tracking**, **Closed-Palm (Fist) left-clicking**, and the **1 Euro Filter** for zero-jitter, pixel-accurate control.
+2. **Control Subsystem**: Vision-based PC mouse cursor navigation driven by anatomical **Palm-Center tracking**, **Index-Thumb Pinch left-clicking**, and the **1 Euro Filter** for zero-jitter, pixel-accurate control.
 
 ---
 
@@ -20,12 +20,12 @@ The system integrates two core subsystems:
 - **21 3D Topological Landmarks**: Full spatial extraction per hand with normalized $(x, y, z)$, pixel $(u, v)$, and real-world metric coordinates $(x, y, z \text{ in meters})$.
 - **Handedness Disambiguation**: Left vs. Right hand classification with per-hand prediction confidence scoring.
 - **Digit Kinematic Evaluation**: Rotation-invariant binary extension determination for Thumb, Index, Middle, Ring, and Pinky digits.
-- **Anatomical Palm-Center Navigation**: Tracks the rigid anatomical centroid of the palm (Wrist + MCP joints) for maximum physical stability.
-- **Closed-Palm (Fist) Left Clicking**: Natural, fatigue-free clicking mechanism: open palm moves the cursor; closing the palm executes a Left Click Down.
-- **Click-Lock Anti-Slip Stabilization**: Temporarily locks cursor coordinates for 120ms during fist closure so clicks land precisely without drifting off target.
-- **Continuous Mouse Dragging**: Holding a closed fist while moving enables drag-and-drop (window movement, text selection, file transfer).
+- **Anatomical Palm-Center Navigation**: Tracks the rigid anatomical centroid of the palm (Wrist + MCP knuckle joints) for maximum physical stability across the full camera frame.
+- **Index-Thumb Pinch Left Clicking**: Brings the index fingertip and thumb fingertip together to trigger Left Mouse Click Down.
+- **Click-Lock Anti-Slip Stabilization**: Temporarily locks cursor coordinates for 120ms during pinch contact so clicks land precisely without drifting off target.
+- **Continuous Mouse Dragging**: Holding pinch while moving enables drag-and-drop (window movement, text selection, file transfer).
 - **1 Euro Filter Precision Smoothing**: Industry-standard speed-adaptive low-pass filter (Casiez et al., CHI 2012) eliminating micro-jitter during slow moves while preserving instant response during rapid sweeps.
-- **Telemetry HUD**: Anti-aliased visualizer displaying joint nodes, bone lines, bounding bounds, dynamic hand closure gauge, and real-time FPS.
+- **Telemetry HUD**: Anti-aliased visualizer displaying joint nodes, bone lines, bounding bounds, palm reticle, pinch gauge line, and real-time FPS.
 
 ---
 
@@ -46,7 +46,7 @@ MARG-One/
 |   `-- control/                  # Control subsystem
 |       |-- __init__.py           # Control module entry exports
 |       |-- one_euro_filter.py    # 1 Euro Filter precision smoothing engine
-|       `-- cursor_controller.py  # Precision Palm Cursor & Fist-Click driver
+|       `-- cursor_controller.py  # Precision Palm Cursor & Pinch-Click driver
 |-- tests/                        # Automated test suites
 |   |-- __init__.py
 |   |-- test_vision.py            # Vision pipeline test suite
@@ -93,7 +93,7 @@ cap.release()
 tracker.close()
 ```
 
-### 4.2 Precision Palm Cursor & Fist-Click Controller
+### 4.2 Precision Palm Cursor & Pinch-Click Controller
 
 ```python
 from marg_one.vision import DualHandTracker
@@ -105,7 +105,7 @@ cursor_controller = HandCursorController(
     speed_gain=1.35,
     min_cutoff=0.5,
     beta=0.005,
-    click_close_threshold=0.62,
+    pinch_threshold=38.0,
     enable_active_control=True,
 )
 
@@ -120,7 +120,7 @@ while cap.isOpened():
     telemetry = cursor_controller.update(hands, frame.shape)
     
     # State: IDLE, MOVING, CLICK_DOWN, DRAGGING, RELEASED
-    print(f"Cursor: {telemetry['screen_pos']} | State: {telemetry['state']} | Fist: {telemetry['closure_score']}")
+    print(f"Cursor: {telemetry['screen_pos']} | State: {telemetry['state']} | Pinch: {telemetry['pinch_distance']}px")
 
 cap.release()
 ```
@@ -152,8 +152,8 @@ Each detected hand yields 21 anatomical landmark nodes:
 | Index | Joint Identifier | Description |
 |---|---|---|
 | `0` | `WRIST` | Palm centroid anchor base |
-| `1 - 4` | `THUMB_CMC`, `THUMB_MCP`, `THUMB_IP`, `THUMB_TIP` | Thumb carpal to distal tip |
-| `5 - 8` | `INDEX_FINGER_MCP`, `PIP`, `DIP`, `TIP` | Index digit joints and tip |
+| `1 - 4` | `THUMB_CMC`, `THUMB_MCP`, `THUMB_IP`, `THUMB_TIP` | Thumb carpal to distal tip (Pinch Actor) |
+| `5 - 8` | `INDEX_FINGER_MCP`, `PIP`, `DIP`, `TIP` | Index digit joints and tip (Pinch Actor) |
 | `9 - 12` | `MIDDLE_FINGER_MCP`, `PIP`, `DIP`, `TIP` | Middle digit joints and tip |
 | `13 - 16` | `RING_FINGER_MCP`, `PIP`, `DIP`, `TIP` | Ring digit joints and tip |
 | `17 - 20` | `PINKY_MCP`, `PIP`, `DIP`, `TIP` | Pinky digit joints and tip |
@@ -166,12 +166,11 @@ Each detected hand yields 21 anatomical landmark nodes:
 - **Jitter Filtering**: 1 Euro Filter adapts its cutoff frequency dynamically based on hand speed:
   - Stationary: Cutoff drops low to completely absorb camera noise and sensor jitter.
   - Moving: Cutoff increases automatically for instantaneous cursor responsiveness.
-- **Left Click**: **Closing the Palm (Fist)**:
-  - Continuous closure ratio computed from all 5 fingertips relative to the palm scale.
-  - Clenching fist ($\ge 62\%$ closure) triggers OS Left Mouse Down.
-  - **Click-Lock Stabilization**: Freezes cursor coordinates for 120ms upon closure to guarantee the click hits the exact desired pixel without drift.
-- **Drag & Drop**: Keeping the palm closed while moving executes continuous OS Mouse Drag.
-- **Release**: Opening the palm back up triggers OS Left Mouse Up.
+- **Left Click**: **Index-Thumb Pinch**:
+  - Bringing the index fingertip (node 8) and thumb fingertip (node 4) together triggers OS Left Mouse Down.
+  - **Click-Lock Stabilization**: Freezes cursor coordinates for 120ms upon pinch contact to guarantee the click hits the exact desired pixel without drift.
+- **Drag & Drop**: Keeping the pinch closed while moving executes continuous OS Mouse Drag.
+- **Release**: Opening the pinch triggers OS Left Mouse Up.
 
 ---
 
@@ -213,8 +212,8 @@ python main.py --mouse
 # Launch palm cursor controller
 python run_cursor_control.py
 
-# Launch with custom speed gain and fist threshold
-python run_cursor_control.py --speed 1.50 --close-thresh 0.60
+# Launch with custom speed gain and pinch threshold
+python run_cursor_control.py --speed 1.40 --pinch 38.0
 ```
 
 ### Runtime Keyboard Controls
@@ -234,7 +233,7 @@ python run_cursor_control.py --speed 1.50 --close-thresh 0.60
 Run the automated offline test suites:
 
 ```bash
-# Test Precision Palm Cursor & 1 Euro Filter
+# Test Precision Palm Cursor & Pinch Click
 python tests/test_cursor_controller.py
 
 # Test Vision Subsystem

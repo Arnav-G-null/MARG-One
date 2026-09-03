@@ -1,5 +1,5 @@
 """
-Automated unit and precision tests for MARG-One Palm Cursor Controller and 1 Euro Filter.
+Automated unit and precision tests for MARG-One Palm Cursor Controller and Pinch-to-Click mechanics.
 """
 
 import sys
@@ -20,8 +20,8 @@ from marg_one.control import (
 )
 
 
-def create_mock_hand(palm_center=(320, 240), is_closed=False) -> HandData:
-    """Creates a mock HandData instance for testing palm tracking and closure."""
+def create_mock_hand(palm_center=(320, 240), is_pinched=False) -> HandData:
+    """Creates a mock HandData instance for testing palm tracking and pinch click."""
     cx, cy = palm_center
     landmarks = []
 
@@ -34,16 +34,18 @@ def create_mock_hand(palm_center=(320, 240), is_closed=False) -> HandData:
         LandmarkIndex.PINKY_MCP: (35, -15),
     }
 
-    # Fingertip offsets (far when open, tucked close to palm center when closed)
-    if is_closed:
+    # Fingertip offsets
+    if is_pinched:
+        # Index tip and thumb tip brought close together (< 20px)
         tip_offsets = {
-            LandmarkIndex.THUMB_TIP: (-10, -5),
-            LandmarkIndex.INDEX_FINGER_TIP: (-8, -10),
-            LandmarkIndex.MIDDLE_FINGER_TIP: (0, -12),
-            LandmarkIndex.RING_FINGER_TIP: (8, -10),
-            LandmarkIndex.PINKY_TIP: (12, -8),
+            LandmarkIndex.THUMB_TIP: (-20, -40),
+            LandmarkIndex.INDEX_FINGER_TIP: (-22, -45),
+            LandmarkIndex.MIDDLE_FINGER_TIP: (0, -95),
+            LandmarkIndex.RING_FINGER_TIP: (25, -90),
+            LandmarkIndex.PINKY_TIP: (45, -75),
         }
     else:
+        # Open / natural distance between index tip and thumb tip (> 60px)
         tip_offsets = {
             LandmarkIndex.THUMB_TIP: (-45, -15),
             LandmarkIndex.INDEX_FINGER_TIP: (-30, -85),
@@ -74,11 +76,11 @@ def create_mock_hand(palm_center=(320, 240), is_closed=False) -> HandData:
         ))
 
     finger_states = {
-        "thumb": not is_closed,
-        "index": not is_closed,
-        "middle": not is_closed,
-        "ring": not is_closed,
-        "pinky": not is_closed,
+        "thumb": True,
+        "index": True,
+        "middle": True,
+        "ring": True,
+        "pinky": True,
     }
 
     return HandData(
@@ -118,15 +120,14 @@ def test_one_euro_filter():
 
 
 def test_palm_cursor_controller():
-    print("[*] Testing Palm-Center HandCursorController...")
+    print("[*] Testing Palm-Center HandCursorController with Pinch Click...")
     mock_driver = MockMouseDriver(screen_w=1920, screen_h=1080)
     controller = HandCursorController(
         driver=mock_driver,
         speed_gain=1.35,
         min_cutoff=0.5,
         beta=0.005,
-        click_close_threshold=0.60,
-        release_threshold=0.45,
+        pinch_threshold=38.0,
         click_lock_duration=0.10,
         enable_active_control=True,
     )
@@ -138,38 +139,38 @@ def test_palm_cursor_controller():
     assert t1["state"] == CursorState.IDLE
     print("    - Idle state verified.")
 
-    # 2. Open Palm (Moving)
-    hand_open = create_mock_hand(palm_center=(320, 240), is_closed=False)
+    # 2. Open Palm Navigation (Unpinched)
+    hand_open = create_mock_hand(palm_center=(320, 240), is_pinched=False)
     t2 = controller.update([hand_open], frame_shape, timestamp=1.033)
     assert t2["state"] == CursorState.MOVING
-    assert t2["is_closed"] is False
+    assert t2["is_pinched"] is False
     assert ("MOVE", t2["screen_pos"]) in mock_driver.history
-    print(f"    - Open Palm moving verified. Target: {t2['screen_pos']}")
+    print(f"    - Palm navigation verified. Target: {t2['screen_pos']} | Pinch dist: {t2['pinch_distance']}px")
 
-    # 3. Closed Palm (Fist -> Click Down + Lock)
-    hand_closed = create_mock_hand(palm_center=(320, 240), is_closed=True)
-    t3 = controller.update([hand_closed], frame_shape, timestamp=1.066)
+    # 3. Pinch Action (Index + Thumb touch -> Click Down + Lock)
+    hand_pinched = create_mock_hand(palm_center=(320, 240), is_pinched=True)
+    t3 = controller.update([hand_pinched], frame_shape, timestamp=1.066)
     assert t3["state"] == CursorState.CLICK_DOWN
-    assert t3["is_closed"] is True
+    assert t3["is_pinched"] is True
     assert t3["is_locked"] is True
     assert mock_driver.is_left_down is True
-    print("    - Closed Palm fist click down verified.")
+    print("    - Pinch-to-click transition verified.")
 
-    # 4. Sustained Fist + Movement (Drag Mode after lock duration)
-    hand_drag = create_mock_hand(palm_center=(380, 260), is_closed=True)
+    # 4. Sustained Pinch + Movement (Dragging Mode after lock duration)
+    hand_drag = create_mock_hand(palm_center=(380, 260), is_pinched=True)
     t4 = controller.update([hand_drag], frame_shape, timestamp=1.25)
     assert t4["state"] == CursorState.DRAGGING
     assert mock_driver.is_left_down is True
     print("    - Continuous dragging state verified.")
 
-    # 5. Open Palm Release (Click Up)
-    hand_open_again = create_mock_hand(palm_center=(380, 260), is_closed=False)
-    t5 = controller.update([hand_open_again], frame_shape, timestamp=1.283)
+    # 5. Pinch Release (Click Up)
+    hand_unpinched = create_mock_hand(palm_center=(380, 260), is_pinched=False)
+    t5 = controller.update([hand_unpinched], frame_shape, timestamp=1.283)
     assert t5["state"] == CursorState.RELEASED
     assert mock_driver.is_left_down is False
-    print("    - Open Palm release verified.")
+    print("    - Pinch release verified.")
 
-    print("[SUCCESS] All Palm Cursor Controller tests passed!")
+    print("[SUCCESS] All Palm Cursor & Pinch Click tests passed!")
 
 
 if __name__ == "__main__":
