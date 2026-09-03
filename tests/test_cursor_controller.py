@@ -57,8 +57,8 @@ def test_cursor_controller():
     mock_driver = MockMouseDriver(screen_w=1920, screen_h=1080)
     controller = HandCursorController(
         driver=mock_driver,
-        margin_x=0.1,
-        margin_y=0.1,
+        margin_x=0.0,
+        margin_y=0.0,
         smoothing_factor=0.5,
         pinch_threshold=35.0,
         enable_active_control=True,

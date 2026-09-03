@@ -99,8 +99,6 @@ import cv2
 
 tracker = DualHandTracker(num_hands=2)
 cursor_controller = HandCursorController(
-    margin_x=0.15,
-    margin_y=0.18,
     smoothing_factor=0.35,
     pinch_threshold=38.0,
     enable_active_control=True,
@@ -159,8 +157,7 @@ Each detected hand yields 21 anatomical landmark nodes:
 
 ## 6. Cursor Control Mechanics
 
-- **Movement**: Tracked using the index fingertip (`LandmarkIndex.INDEX_FINGER_TIP`, node 8) of any detected hand.
-- **Active Screen Mapping Zone**: An internal boundary frame (configurable via `--margin-x` and `--margin-y`) scales index movement linearly to full screen bounds $(W_{screen}, H_{screen})$.
+- **Movement**: Tracked using the index fingertip (`LandmarkIndex.INDEX_FINGER_TIP`, node 8) across the full camera frame, mapped directly to display bounds $(W_{screen}, H_{screen})$ without restricting boundaries.
 - **Pinch-to-Click**: Euclidean distance between Index Tip (node 8) and Thumb Tip (node 4):
   - $\text{Distance} < \text{Threshold}$ ($\approx 38\text{px}$): Triggers OS Left Mouse Down.
   - Holding pinch while moving maintains OS Left Mouse Drag (selection, window drag).

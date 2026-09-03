@@ -113,8 +113,8 @@ class HandCursorController:
     def __init__(
         self,
         driver: Optional[BaseMouseDriver] = None,
-        margin_x: float = 0.15,
-        margin_y: float = 0.18,
+        margin_x: float = 0.0,
+        margin_y: float = 0.0,
         smoothing_factor: float = 0.35,
         pinch_threshold: float = 38.0,
         enable_active_control: bool = True,

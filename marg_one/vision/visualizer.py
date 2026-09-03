@@ -55,7 +55,7 @@ class HandVisualizer:
         show_bbox: bool = True,
         show_finger_status: bool = True,
         show_landmark_ids: bool = False,
-        show_interaction_box: bool = True,
+        show_interaction_box: bool = False,
     ):
         self.show_skeleton = show_skeleton
         self.show_landmarks = show_landmarks
