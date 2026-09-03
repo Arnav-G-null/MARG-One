@@ -1,14 +1,16 @@
 # MARG-One: Modular Multimodal AI & Robotics Framework
 
-## Vision Subsystem: Dual-Hand 3D Kinematics & Gesture Recognition
+## Subsystems: Vision Kinematics, Gesture Recognition & Hand Cursor Control
 
 ---
 
 ## 1. Overview
 
-MARG-One is a modular robotics and intelligent computing framework designed for real-time perception, spatial reasoning, and multimodal human-machine interaction. 
+MARG-One is a modular robotics and intelligent computing framework designed for real-time perception, spatial reasoning, and multimodal human-machine interaction.
 
-This repository houses the core **Vision Subsystem**, providing real-time dual-hand tracking, 3D anatomical skeleton extraction, digit kinematic analysis, and extensible gesture-to-value mapping for downstream robotic controls, assistive interfaces, and interactive systems.
+The system integrates two core subsystems:
+1. **Vision Subsystem**: Real-time dual-hand tracking, 3D anatomical skeleton extraction, digit kinematic analysis, and extensible gesture-to-value mapping.
+2. **Control Subsystem**: Vision-based PC mouse cursor navigation driven by index finger tracking with pinch-to-click actuation.
 
 ---
 
@@ -18,8 +20,10 @@ This repository houses the core **Vision Subsystem**, providing real-time dual-h
 - **21 3D Topological Landmarks**: Full spatial extraction per hand with normalized $(x, y, z)$, pixel $(u, v)$, and real-world metric coordinates $(x, y, z \text{ in meters})$.
 - **Handedness Disambiguation**: Left vs. Right hand classification with per-hand prediction confidence scoring.
 - **Digit Kinematic Evaluation**: Rotation-invariant binary extension determination for Thumb, Index, Middle, Ring, and Pinky digits.
-- **Extensible Value Mapping**: Decoupled sign interpreter providing structured value returns and custom evaluator hooks.
-- **Diagnostic Telemetry HUD**: High-contrast, anti-aliased visualizer displaying joint nodes, anatomical bone lines, bounding bounds, and real-time FPS.
+- **Hand Cursor Navigation**: Seamlessly controls the operating system mouse cursor via the index finger of either hand.
+- **Pinch-to-Click & Drag**: Intuitive thumb-index pinch detection triggering left mouse clicks, click-and-drag operations, and instant release.
+- **Motion Smoothing & Jitter Reduction**: Exponential Moving Average (EMA) and velocity-sensitive interpolation for smooth cursor motion.
+- **Telemetry HUD**: Anti-aliased visualizer displaying joint nodes, bone lines, bounding bounds, active interaction zones, and real-time FPS.
 
 ---
 
@@ -31,17 +35,22 @@ MARG-One/
 |   |-- __init__.py               # Top-level package exports
 |   |-- core/                     # Base framework interfaces
 |   |   `-- __init__.py           # Subsystem telemetry & state definitions
-|   `-- vision/                   # Vision subsystem
-|       |-- __init__.py           # Vision module entry exports
-|       |-- model_loader.py       # Automated model asset manager
-|       |-- tracker.py            # DualHandTracker & HandData kinematic structures
-|       |-- visualizer.py         # HandVisualizer rendering engine
-|       `-- sign_processor.py     # SignProcessor gesture rule evaluator
+|   |-- vision/                   # Vision subsystem
+|   |   |-- __init__.py           # Vision module entry exports
+|   |   |-- model_loader.py       # Automated model asset manager
+|   |   |-- tracker.py            # DualHandTracker & HandData kinematic structures
+|   |   |-- visualizer.py         # HandVisualizer rendering engine
+|   |   `-- sign_processor.py     # SignProcessor gesture rule evaluator
+|   `-- control/                  # Control subsystem
+|       |-- __init__.py           # Control module entry exports
+|       `-- cursor_controller.py  # HandCursorController & OS mouse driver
 |-- tests/                        # Automated test suites
 |   |-- __init__.py
-|   `-- test_vision.py            # Headless unit and pipeline integration tests
+|   |-- test_vision.py            # Vision pipeline test suite
+|   `-- test_cursor_controller.py # Mouse control unit and integration tests
 |-- .gitignore                    # Version control exclusion rules
-|-- main.py                       # Standalone camera runner application
+|-- main.py                       # Unified interactive runner (Gestures + Cursor)
+|-- run_cursor_control.py         # Dedicated hand cursor controller launcher
 |-- requirements.txt              # Production dependencies
 |-- setup.py                      # Package installation configuration
 `-- README.md                     # System documentation
@@ -49,29 +58,17 @@ MARG-One/
 
 ---
 
-## 4. Integration into Bigger Systems
+## 4. Subsystem Integration & Usage
 
-The Vision Subsystem is packaged as an independent module (`marg_one.vision`) that seamlessly integrates into larger autonomous or interactive pipelines.
-
-### Module Usage Example
+### 4.1 Vision & Sign Interpretation
 
 ```python
 from marg_one.vision import DualHandTracker, SignProcessor, HandVisualizer
 import cv2
 
-# Initialize tracker
 tracker = DualHandTracker(num_hands=2, min_detection_confidence=0.5)
 sign_processor = SignProcessor()
 visualizer = HandVisualizer()
-
-# Register custom gesture rule
-def custom_rule(hands):
-    if len(hands) == 2:
-        # Custom logic using 3D landmarks or finger patterns
-        return {"sign_name": "CUSTOM_ACTION", "value": 0x42, "confidence": 0.99}
-    return None
-
-sign_processor.register_custom_sign(custom_rule)
 
 cap = cv2.VideoCapture(0)
 while cap.isOpened():
@@ -79,15 +76,11 @@ while cap.isOpened():
     if not ret:
         break
 
-    # Extract 3D hand data
     hands = tracker.process_frame(frame)
-
-    # Evaluate signs
     telemetry = sign_processor.process_hands(hands)
     if telemetry:
-        print(f"Action: {telemetry['sign_name']} -> Value: {telemetry['value']}")
+        print(f"Sign: {telemetry['sign_name']} -> Value: {telemetry['value']}")
 
-    # Render diagnostics
     frame = visualizer.draw_skeleton(frame, hands)
     cv2.imshow("MARG-One Stream", frame)
     if cv2.waitKey(1) & 0xFF == ord('q'):
@@ -95,6 +88,38 @@ while cap.isOpened():
 
 cap.release()
 tracker.close()
+```
+
+### 4.2 Hand Cursor & Mouse Controller
+
+```python
+from marg_one.vision import DualHandTracker
+from marg_one.control import HandCursorController
+import cv2
+
+tracker = DualHandTracker(num_hands=2)
+cursor_controller = HandCursorController(
+    margin_x=0.15,
+    margin_y=0.18,
+    smoothing_factor=0.35,
+    pinch_threshold=38.0,
+    enable_active_control=True,
+)
+
+cap = cv2.VideoCapture(0)
+while cap.isOpened():
+    ret, frame = cap.read()
+    if not ret:
+        break
+
+    frame = cv2.flip(frame, 1)
+    hands = tracker.process_frame(frame)
+    telemetry = cursor_controller.update(hands, frame.shape)
+    
+    # State: IDLE, MOVING, CLICK_DOWN, DRAGGING, RELEASED
+    print(f"Cursor: {telemetry['screen_pos']} | State: {telemetry['state']}")
+
+cap.release()
 ```
 
 ---
@@ -125,64 +150,29 @@ Each detected hand yields 21 anatomical landmark nodes:
 |---|---|---|
 | `0` | `WRIST` | Base wrist reference origin |
 | `1 - 4` | `THUMB_CMC`, `THUMB_MCP`, `THUMB_IP`, `THUMB_TIP` | Thumb carpal to distal tip |
-| `5 - 8` | `INDEX_FINGER_MCP`, `PIP`, `DIP`, `TIP` | Index digit joints and tip |
+| `5 - 8` | `INDEX_FINGER_MCP`, `PIP`, `DIP`, `TIP` | Index digit joints and tip (Cursor Driver) |
 | `9 - 12` | `MIDDLE_FINGER_MCP`, `PIP`, `DIP`, `TIP` | Middle digit joints and tip |
 | `13 - 16` | `RING_FINGER_MCP`, `PIP`, `DIP`, `TIP` | Ring digit joints and tip |
 | `17 - 20` | `PINKY_MCP`, `PIP`, `DIP`, `TIP` | Pinky digit joints and tip |
 
 ---
 
-## 6. Coordinate Frames
+## 6. Cursor Control Mechanics
 
-1. **Normalized Image Frame**:
-   - $x \in [0.0, 1.0]$: Horizontal position relative to image width.
-   - $y \in [0.0, 1.0]$: Vertical position relative to image height.
-   - $z$: Relative depth coordinate normalized to wrist scale.
-
-2. **Pixel Coordinate Frame**:
-   - $px = \lfloor x \times W \rfloor$, $py = \lfloor y \times H \rfloor$.
-
-3. **World Coordinate Frame**:
-   - 3D metric coordinates $(X, Y, Z)$ measured in meters with origin centered at the hand's geometric anchor.
+- **Movement**: Tracked using the index fingertip (`LandmarkIndex.INDEX_FINGER_TIP`, node 8) of any detected hand.
+- **Active Screen Mapping Zone**: An internal boundary frame (configurable via `--margin-x` and `--margin-y`) scales index movement linearly to full screen bounds $(W_{screen}, H_{screen})$.
+- **Pinch-to-Click**: Euclidean distance between Index Tip (node 8) and Thumb Tip (node 4):
+  - $\text{Distance} < \text{Threshold}$ ($\approx 38\text{px}$): Triggers OS Left Mouse Down.
+  - Holding pinch while moving maintains OS Left Mouse Drag (selection, window drag).
+  - $\text{Distance} \ge \text{Threshold}$: Triggers OS Left Mouse Up.
 
 ---
 
-## 7. Sign & Value Evaluation Engine
-
-The `SignProcessor` interprets single and dual-hand skeletal states into discrete payloads:
-
-```python
-{
-    "sign_name": "TWO_HAND_HEART",
-    "value": "HEART_SIGN_VALUE",
-    "confidence": 0.95,
-    "hands_count": 2,
-    "details": {
-        "index_dist": 28.4,
-        "thumb_dist": 31.2
-    }
-}
-```
-
-### Pre-Configured Sign Patterns
-
-| Sign Identifier | Hand Mode | Digit Bitmask (`TIMRP`) | Output Value |
-|---|---|---|---|
-| `TWO_HAND_HEART` | Dual | Tips proximate ($< 65\text{px}$) | `HEART_SIGN_VALUE` |
-| `BOTH_OPEN_PALMS` | Dual | `11111` / `11111` | `OPEN_PALMS_VALUE` |
-| `DOUBLE_PEACE` | Dual | `01100` / `01100` | `DOUBLE_PEACE_VALUE` |
-| `DOUBLE_FIST` | Dual | `00000` / `00000` | `DOUBLE_FIST_VALUE` |
-| `THUMBS_UP` | Single | `10000` | `THUMBS_UP` |
-| `PEACE / V` | Single | `01100` | `PEACE` |
-| `OPEN_PALM` | Single | `11111` | `PALM` |
-| `FIST` | Single | `00000` | `FIST` |
-
----
-
-## 8. Installation & Setup
+## 7. Installation & Setup
 
 ### Requirements
 - Python 3.9 or higher (tested on Python 3.13)
+- Windows OS (for native `ctypes` mouse driver; mock driver used on other platforms)
 - Webcam / Camera input device
 
 ### Installation
@@ -200,49 +190,54 @@ pip install -e .
 
 ---
 
-## 9. Running Standalone Application
+## 8. Running Applications
 
+### 8.1 Unified Launcher (`main.py`)
 ```bash
-# Launch default camera feed (Index 0, 1280x720)
+# Run in Gesture / Sign Recognition mode
 python main.py
 
-# Launch with custom arguments
-python main.py --cam 0 --width 1920 --height 1080 --conf 0.6
+# Run in Hand Mouse Controller mode
+python main.py --mouse
 ```
 
-### Command-Line Arguments
+### 8.2 Dedicated Hand Cursor Launcher (`run_cursor_control.py`)
+```bash
+# Launch cursor controller
+python run_cursor_control.py
 
-| Argument | Type | Default | Description |
-|---|---|---|---|
-| `--cam` | `int` | `0` | Camera capture device index |
-| `--width` | `int` | `1280` | Frame capture width resolution |
-| `--height` | `int` | `720` | Frame capture height resolution |
-| `--conf` | `float` | `0.5` | Detection and tracking confidence threshold |
-| `--no-flip` | `flag` | `False` | Disables mirror horizontal frame flip |
+# Launch with custom sensitivity and pinch distance
+python run_cursor_control.py --smooth 0.40 --pinch 35.0
+```
 
-### Runtime Keyboard Shortcuts
+### Runtime Keyboard Controls
 
 | Key | Function |
 |---|---|
 | `q` or `ESC` | Exit application cleanly |
-| `s` | Toggle hand skeleton rendering |
+| `m` | Toggle active mouse control mode on/off |
+| `s` | Toggle hand skeleton lines |
 | `b` | Toggle bounding boxes |
-| `f` | Toggle digit state telemetry (`T:1 I:1 M:0 R:0 P:0`) |
-| `i` | Toggle topological landmark ID numbering |
+| `f` | Toggle digit state indicators (`T:1 I:1 M:0 R:0 P:0`) |
+| `z` | Toggle active screen interaction zone boundary |
 
 ---
 
-## 10. Automated Testing
+## 9. Automated Testing
 
-Run the automated offline unit and pipeline verification suite:
+Run the automated offline test suites:
 
 ```bash
+# Test Hand Cursor Controller
+python tests/test_cursor_controller.py
+
+# Test Vision Subsystem
 python tests/test_vision.py
 ```
 
 ---
 
-## 11. License & Maintainers
+## 10. License & Maintainers
 
 - **Author**: Arnav Garg
 - **Repository**: [https://github.com/Arnav-G-null/MARG-One](https://github.com/Arnav-G-null/MARG-One)

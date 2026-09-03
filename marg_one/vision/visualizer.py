@@ -2,7 +2,7 @@
 MARG-One Vision Subsystem: 3D Skeleton, Bounding Box, and Telemetry Visualizer.
 """
 
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Tuple
 import cv2
 import numpy as np
 
@@ -10,6 +10,7 @@ from marg_one.vision.tracker import (
     HandData,
     HAND_CONNECTIONS,
     FINGERTIP_INDICES,
+    LandmarkIndex,
 )
 
 
@@ -29,6 +30,11 @@ class VisualizerTheme:
     RIGHT_BOX_COLOR = (50, 130, 255)
     RIGHT_TEXT_BG = (30, 90, 200)
 
+    # Interaction & Mouse Palette
+    CURSOR_NAV_COLOR = (255, 200, 0)       # Cyan/Yellow
+    CURSOR_CLICK_COLOR = (50, 255, 50)     # Neon Green (Active Click)
+    INTERACTION_BOX_COLOR = (120, 120, 140) # Subtle boundary
+
     # Telemetry HUD
     HUD_BG = (25, 25, 30)
     HUD_TEXT = (240, 240, 240)
@@ -39,7 +45,7 @@ class VisualizerTheme:
 
 class HandVisualizer:
     """
-    Renders 3D hand skeletons, topological landmarks, bounding boxes, and HUD overlays.
+    Renders 3D hand skeletons, topological landmarks, bounding boxes, cursor feedback, and HUD overlays.
     """
 
     def __init__(
@@ -49,12 +55,14 @@ class HandVisualizer:
         show_bbox: bool = True,
         show_finger_status: bool = True,
         show_landmark_ids: bool = False,
+        show_interaction_box: bool = True,
     ):
         self.show_skeleton = show_skeleton
         self.show_landmarks = show_landmarks
         self.show_bbox = show_bbox
         self.show_finger_status = show_finger_status
         self.show_landmark_ids = show_landmark_ids
+        self.show_interaction_box = show_interaction_box
 
     def _get_hand_colors(self, handedness: str):
         if handedness.lower() == "left":
@@ -116,7 +124,7 @@ class HandVisualizer:
 
                 label = f"{hand.handedness} ({int(hand.score * 100)}%)"
                 (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
-                
+
                 label_ymin = max(0, ymin - th - 8)
                 cv2.rectangle(
                     frame,
@@ -154,15 +162,80 @@ class HandVisualizer:
 
         return frame
 
+    def draw_cursor_overlay(self, frame: np.ndarray, telemetry: Dict[str, Any]) -> np.ndarray:
+        """
+        Renders cursor interaction area, pinch line gauge, and active cursor indicators.
+        """
+        # 1. Active Interaction Box
+        if self.show_interaction_box and "interaction_box" in telemetry:
+            x1, y1, x2, y2 = telemetry["interaction_box"]
+            # Corner accents
+            corner_len = 20
+            box_col = VisualizerTheme.INTERACTION_BOX_COLOR
+            cv2.rectangle(frame, (x1, y1), (x2, y2), box_col, 1, cv2.LINE_AA)
+
+            # Draw corners for modern aesthetic
+            for cx, cy, dx, dy in [(x1, y1, 1, 1), (x2, y1, -1, 1), (x1, y2, 1, -1), (x2, y2, -1, -1)]:
+                cv2.line(frame, (cx, cy), (cx + dx * corner_len, cy), (220, 220, 240), 2, cv2.LINE_AA)
+                cv2.line(frame, (cx, cy), (cx, cy + dy * corner_len), (220, 220, 240), 2, cv2.LINE_AA)
+
+            cv2.putText(
+                frame,
+                "SCREEN ACTIVE ZONE",
+                (x1 + 6, y1 + 16),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.38,
+                (180, 180, 200),
+                1,
+                cv2.LINE_AA,
+            )
+
+        # 2. Pinch Gauge & Index Indicator
+        raw_index = telemetry.get("raw_index_pos")
+        raw_thumb = telemetry.get("raw_thumb_pos")
+        is_pinched = telemetry.get("is_pinched", False)
+        state = telemetry.get("state", "IDLE")
+
+        if raw_index is not None:
+            # Highlight index fingertip as cursor driver
+            ind_color = VisualizerTheme.CURSOR_CLICK_COLOR if is_pinched else VisualizerTheme.CURSOR_NAV_COLOR
+            cv2.circle(frame, raw_index, 10, ind_color, 2, cv2.LINE_AA)
+            cv2.circle(frame, raw_index, 4, ind_color, -1, cv2.LINE_AA)
+
+            if raw_thumb is not None:
+                # Line between index and thumb
+                line_color = VisualizerTheme.CURSOR_CLICK_COLOR if is_pinched else (100, 200, 255)
+                line_thickness = 3 if is_pinched else 1
+                cv2.line(frame, raw_index, raw_thumb, line_color, line_thickness, cv2.LINE_AA)
+
+                # Distance text indicator
+                p_dist = telemetry.get("pinch_distance", 0.0)
+                mid_x = (raw_index[0] + raw_thumb[0]) // 2
+                mid_y = (raw_index[1] + raw_thumb[1]) // 2
+                dist_label = f"{p_dist}px"
+                cv2.putText(
+                    frame,
+                    dist_label,
+                    (mid_x + 8, mid_y),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.38,
+                    (255, 255, 255),
+                    1,
+                    cv2.LINE_AA,
+                )
+
+        return frame
+
     def draw_hud(
         self,
         frame: np.ndarray,
         fps: float,
         num_hands: int,
         sign_info: Optional[Dict[str, Any]] = None,
+        cursor_telemetry: Optional[Dict[str, Any]] = None,
     ) -> np.ndarray:
         """
-        Renders the top telemetry banner showing FPS, active hand count, and sign output.
+        Renders the top telemetry banner showing FPS, active hand count, sign output, and cursor state.
         """
         h, w, _ = frame.shape
         banner_h = 56
@@ -187,7 +260,7 @@ class HandVisualizer:
         )
 
         # Hands count
-        hands_col = VisualizerTheme.ACCENT_GREEN if num_hands == 2 else (VisualizerTheme.LEFT_BONE_COLOR if num_hands == 1 else (150, 150, 150))
+        hands_col = VisualizerTheme.ACCENT_GREEN if num_hands >= 1 else (150, 150, 150)
         cv2.putText(
             frame,
             f"Hands: {num_hands} / 2",
@@ -199,8 +272,31 @@ class HandVisualizer:
             cv2.LINE_AA,
         )
 
-        # Sign Output badge
-        if sign_info:
+        # Mouse / Cursor Status Badge (if active)
+        if cursor_telemetry:
+            c_state = cursor_telemetry.get("state", "IDLE")
+            pos = cursor_telemetry.get("screen_pos", (0, 0))
+            is_click = cursor_telemetry.get("is_pinched", False)
+            hand_lbl = cursor_telemetry.get("active_hand", "None")
+
+            badge_col = VisualizerTheme.ACCENT_GREEN if is_click else (VisualizerTheme.ACCENT_PURPLE if c_state == "MOVING" else (100, 100, 110))
+            status_text = f"Cursor: ({pos[0]}, {pos[1]}) | [{c_state}] | Hand: {hand_lbl}"
+
+            (tw, th), _ = cv2.getTextSize(status_text, cv2.FONT_HERSHEY_SIMPLEX, 0.55, 2)
+            bx = max(300, w // 2 - tw // 2)
+            cv2.rectangle(frame, (bx - 10, 10), (bx + tw + 10, 46), (40, 40, 52), -1)
+            cv2.rectangle(frame, (bx - 10, 10), (bx + tw + 10, 46), badge_col, 2 if is_click else 1)
+            cv2.putText(
+                frame,
+                status_text,
+                (bx, 34),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.55,
+                (255, 255, 255),
+                2,
+                cv2.LINE_AA,
+            )
+        elif sign_info:
             sign_name = sign_info.get("sign_name", "None")
             sign_val = sign_info.get("value", "")
             display_text = f"Sign: {sign_name}"
@@ -209,20 +305,8 @@ class HandVisualizer:
 
             (tw, th), _ = cv2.getTextSize(display_text, cv2.FONT_HERSHEY_SIMPLEX, 0.62, 2)
             bx = max(310, w // 2 - tw // 2)
-            cv2.rectangle(
-                frame,
-                (bx - 12, 10),
-                (bx + tw + 12, 46),
-                (45, 45, 60),
-                -1,
-            )
-            cv2.rectangle(
-                frame,
-                (bx - 12, 10),
-                (bx + tw + 12, 46),
-                VisualizerTheme.ACCENT_PURPLE,
-                1,
-            )
+            cv2.rectangle(frame, (bx - 12, 10), (bx + tw + 12, 46), (45, 45, 60), -1)
+            cv2.rectangle(frame, (bx - 12, 10), (bx + tw + 12, 46), VisualizerTheme.ACCENT_PURPLE, 1)
             cv2.putText(
                 frame,
                 display_text,
@@ -236,7 +320,7 @@ class HandVisualizer:
         else:
             cv2.putText(
                 frame,
-                "Show 2 hands to camera...",
+                "Ready for Gestures / Mouse Control...",
                 (320, 35),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.55,
@@ -246,13 +330,13 @@ class HandVisualizer:
             )
 
         # Bottom help status bar
-        controls_text = "[Q: Quit]  [S: Toggle Skeleton]  [B: Toggle BBox]  [F: Toggle Finger Status]  [I: Toggle LM IDs]"
+        controls_text = "[Q: Quit]  [M: Toggle Mouse Control]  [S: Skeleton]  [B: BBox]  [F: Fingers]  [Z: Active Zone]"
         cv2.putText(
             frame,
             controls_text,
             (16, h - 14),
             cv2.FONT_HERSHEY_SIMPLEX,
-            0.42,
+            0.40,
             (180, 180, 190),
             1,
             cv2.LINE_AA,
