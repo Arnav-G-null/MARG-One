@@ -1,5 +1,5 @@
 """
-MARG-One Vision & Control: Dual-Hand Kinematics, 3D Skeleton Extraction, Sign Interpretation & Cursor Driving.
+MARG-One Vision & Control: Dual-Hand Kinematics, 3D Skeleton Extraction, Sign Interpretation & Precision Cursor Driving.
 Main interactive camera stream runner.
 """
 
@@ -20,15 +20,14 @@ except ImportError:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="MARG-One Dual-Hand Tracking, Skeleton & Cursor System")
+    parser = argparse.ArgumentParser(description="MARG-One Dual-Hand Tracking, Skeleton & Precision Cursor System")
     parser.add_argument("--cam", type=int, default=0, help="Webcam device index (default: 0)")
     parser.add_argument("--width", type=int, default=1280, help="Camera width resolution (default: 1280)")
     parser.add_argument("--height", type=int, default=720, help="Camera height resolution (default: 720)")
     parser.add_argument("--no-flip", action="store_true", help="Disable mirror horizontal flip")
     parser.add_argument("--conf", type=float, default=0.5, help="Minimum detection confidence (default: 0.5)")
-    parser.add_argument("--mouse", action="store_true", help="Enable active hand mouse cursor control mode")
-    parser.add_argument("--smooth", type=float, default=0.35, help="Cursor smoothing factor (default: 0.35)")
-    parser.add_argument("--pinch", type=float, default=38.0, help="Pinch threshold in pixels (default: 38.0)")
+    parser.add_argument("--mouse", action="store_true", help="Enable active palm-center mouse cursor control mode")
+    parser.add_argument("--speed", type=float, default=1.35, help="Cursor speed gain multiplier (default: 1.35)")
     args = parser.parse_args()
 
     print("=" * 68)
@@ -37,14 +36,13 @@ def main():
     print(f"[*] Camera Index:     {args.cam}")
     print(f"[*] Resolution:       {args.width}x{args.height}")
     print(f"[*] Confidence:       {args.conf}")
-    print(f"[*] Mode:             {'HAND CURSOR CONTROLLER' if args.mouse else 'GESTURE & SIGN RECOGNITION'}")
+    print(f"[*] Mode:             {'PALM CURSOR CONTROLLER' if args.mouse else 'GESTURE & SIGN RECOGNITION'}")
     print(f"[*] Interactive Controls:")
     print(f"    - 'q' or ESC : Exit application")
     print(f"    - 'm'        : Toggle active mouse control mode")
     print(f"    - 's'        : Toggle hand skeletons")
     print(f"    - 'b'        : Toggle bounding boxes")
     print(f"    - 'f'        : Toggle finger states HUD")
-    print(f"    - 'z'        : Toggle active screen zone overlay")
     print("=" * 68)
 
     # Initialize Camera
@@ -67,8 +65,7 @@ def main():
     visualizer = HandVisualizer()
     sign_processor = SignProcessor()
     cursor_controller = HandCursorController(
-        smoothing_factor=args.smooth,
-        pinch_threshold=args.pinch,
+        speed_gain=args.speed,
         enable_active_control=args.mouse,
     )
 
@@ -105,8 +102,8 @@ def main():
             cursor_telemetry = None
 
             if mouse_mode_active:
-                # 2A. Update Hand Mouse Controller
-                cursor_telemetry = cursor_controller.update(hands, frame.shape)
+                # 2A. Update Palm Mouse Controller
+                cursor_telemetry = cursor_controller.update(hands, frame.shape, timestamp=curr_time)
             else:
                 # 2B. Evaluate Signs & Gestures
                 sign_info = sign_processor.process_hands(hands)
@@ -145,8 +142,6 @@ def main():
                 visualizer.show_bbox = not visualizer.show_bbox
             elif key in (ord('f'), ord('F')):
                 visualizer.show_finger_status = not visualizer.show_finger_status
-            elif key in (ord('z'), ord('Z')):
-                visualizer.show_interaction_box = not visualizer.show_interaction_box
 
     finally:
         cap.release()

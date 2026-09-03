@@ -1,6 +1,6 @@
 # MARG-One: Modular Multimodal AI & Robotics Framework
 
-## Subsystems: Vision Kinematics, Gesture Recognition & Hand Cursor Control
+## Subsystems: Vision Kinematics, Gesture Recognition & Precision Palm Cursor Control
 
 ---
 
@@ -10,7 +10,7 @@ MARG-One is a modular robotics and intelligent computing framework designed for 
 
 The system integrates two core subsystems:
 1. **Vision Subsystem**: Real-time dual-hand tracking, 3D anatomical skeleton extraction, digit kinematic analysis, and extensible gesture-to-value mapping.
-2. **Control Subsystem**: Vision-based PC mouse cursor navigation driven by index finger tracking with pinch-to-click actuation.
+2. **Control Subsystem**: Vision-based PC mouse cursor navigation driven by anatomical **Palm-Center tracking**, **Closed-Palm (Fist) left-clicking**, and the **1 Euro Filter** for zero-jitter, pixel-accurate control.
 
 ---
 
@@ -20,10 +20,12 @@ The system integrates two core subsystems:
 - **21 3D Topological Landmarks**: Full spatial extraction per hand with normalized $(x, y, z)$, pixel $(u, v)$, and real-world metric coordinates $(x, y, z \text{ in meters})$.
 - **Handedness Disambiguation**: Left vs. Right hand classification with per-hand prediction confidence scoring.
 - **Digit Kinematic Evaluation**: Rotation-invariant binary extension determination for Thumb, Index, Middle, Ring, and Pinky digits.
-- **Hand Cursor Navigation**: Seamlessly controls the operating system mouse cursor via the index finger of either hand.
-- **Pinch-to-Click & Drag**: Intuitive thumb-index pinch detection triggering left mouse clicks, click-and-drag operations, and instant release.
-- **Motion Smoothing & Jitter Reduction**: Exponential Moving Average (EMA) and velocity-sensitive interpolation for smooth cursor motion.
-- **Telemetry HUD**: Anti-aliased visualizer displaying joint nodes, bone lines, bounding bounds, active interaction zones, and real-time FPS.
+- **Anatomical Palm-Center Navigation**: Tracks the rigid anatomical centroid of the palm (Wrist + MCP joints) for maximum physical stability.
+- **Closed-Palm (Fist) Left Clicking**: Natural, fatigue-free clicking mechanism: open palm moves the cursor; closing the palm executes a Left Click Down.
+- **Click-Lock Anti-Slip Stabilization**: Temporarily locks cursor coordinates for 120ms during fist closure so clicks land precisely without drifting off target.
+- **Continuous Mouse Dragging**: Holding a closed fist while moving enables drag-and-drop (window movement, text selection, file transfer).
+- **1 Euro Filter Precision Smoothing**: Industry-standard speed-adaptive low-pass filter (Casiez et al., CHI 2012) eliminating micro-jitter during slow moves while preserving instant response during rapid sweeps.
+- **Telemetry HUD**: Anti-aliased visualizer displaying joint nodes, bone lines, bounding bounds, dynamic hand closure gauge, and real-time FPS.
 
 ---
 
@@ -43,14 +45,15 @@ MARG-One/
 |   |   `-- sign_processor.py     # SignProcessor gesture rule evaluator
 |   `-- control/                  # Control subsystem
 |       |-- __init__.py           # Control module entry exports
-|       `-- cursor_controller.py  # HandCursorController & OS mouse driver
+|       |-- one_euro_filter.py    # 1 Euro Filter precision smoothing engine
+|       `-- cursor_controller.py  # Precision Palm Cursor & Fist-Click driver
 |-- tests/                        # Automated test suites
 |   |-- __init__.py
 |   |-- test_vision.py            # Vision pipeline test suite
-|   `-- test_cursor_controller.py # Mouse control unit and integration tests
+|   `-- test_cursor_controller.py # Mouse control unit and precision tests
 |-- .gitignore                    # Version control exclusion rules
 |-- main.py                       # Unified interactive runner (Gestures + Cursor)
-|-- run_cursor_control.py         # Dedicated hand cursor controller launcher
+|-- run_cursor_control.py         # Dedicated palm cursor controller launcher
 |-- requirements.txt              # Production dependencies
 |-- setup.py                      # Package installation configuration
 `-- README.md                     # System documentation
@@ -90,7 +93,7 @@ cap.release()
 tracker.close()
 ```
 
-### 4.2 Hand Cursor & Mouse Controller
+### 4.2 Precision Palm Cursor & Fist-Click Controller
 
 ```python
 from marg_one.vision import DualHandTracker
@@ -99,8 +102,10 @@ import cv2
 
 tracker = DualHandTracker(num_hands=2)
 cursor_controller = HandCursorController(
-    smoothing_factor=0.35,
-    pinch_threshold=38.0,
+    speed_gain=1.35,
+    min_cutoff=0.5,
+    beta=0.005,
+    click_close_threshold=0.62,
     enable_active_control=True,
 )
 
@@ -115,7 +120,7 @@ while cap.isOpened():
     telemetry = cursor_controller.update(hands, frame.shape)
     
     # State: IDLE, MOVING, CLICK_DOWN, DRAGGING, RELEASED
-    print(f"Cursor: {telemetry['screen_pos']} | State: {telemetry['state']}")
+    print(f"Cursor: {telemetry['screen_pos']} | State: {telemetry['state']} | Fist: {telemetry['closure_score']}")
 
 cap.release()
 ```
@@ -146,9 +151,9 @@ Each detected hand yields 21 anatomical landmark nodes:
 
 | Index | Joint Identifier | Description |
 |---|---|---|
-| `0` | `WRIST` | Base wrist reference origin |
+| `0` | `WRIST` | Palm centroid anchor base |
 | `1 - 4` | `THUMB_CMC`, `THUMB_MCP`, `THUMB_IP`, `THUMB_TIP` | Thumb carpal to distal tip |
-| `5 - 8` | `INDEX_FINGER_MCP`, `PIP`, `DIP`, `TIP` | Index digit joints and tip (Cursor Driver) |
+| `5 - 8` | `INDEX_FINGER_MCP`, `PIP`, `DIP`, `TIP` | Index digit joints and tip |
 | `9 - 12` | `MIDDLE_FINGER_MCP`, `PIP`, `DIP`, `TIP` | Middle digit joints and tip |
 | `13 - 16` | `RING_FINGER_MCP`, `PIP`, `DIP`, `TIP` | Ring digit joints and tip |
 | `17 - 20` | `PINKY_MCP`, `PIP`, `DIP`, `TIP` | Pinky digit joints and tip |
@@ -157,11 +162,16 @@ Each detected hand yields 21 anatomical landmark nodes:
 
 ## 6. Cursor Control Mechanics
 
-- **Movement**: Tracked using the index fingertip (`LandmarkIndex.INDEX_FINGER_TIP`, node 8) across the full camera frame, mapped directly to display bounds $(W_{screen}, H_{screen})$ without restricting boundaries.
-- **Pinch-to-Click**: Euclidean distance between Index Tip (node 8) and Thumb Tip (node 4):
-  - $\text{Distance} < \text{Threshold}$ ($\approx 38\text{px}$): Triggers OS Left Mouse Down.
-  - Holding pinch while moving maintains OS Left Mouse Drag (selection, window drag).
-  - $\text{Distance} \ge \text{Threshold}$: Triggers OS Left Mouse Up.
+- **Movement**: Driven by the anatomical **Palm Center** (centroid of landmarks `0, 5, 9, 13, 17`), mapped linearly across the full camera frame with adaptive speed gain.
+- **Jitter Filtering**: 1 Euro Filter adapts its cutoff frequency dynamically based on hand speed:
+  - Stationary: Cutoff drops low to completely absorb camera noise and sensor jitter.
+  - Moving: Cutoff increases automatically for instantaneous cursor responsiveness.
+- **Left Click**: **Closing the Palm (Fist)**:
+  - Continuous closure ratio computed from all 5 fingertips relative to the palm scale.
+  - Clenching fist ($\ge 62\%$ closure) triggers OS Left Mouse Down.
+  - **Click-Lock Stabilization**: Freezes cursor coordinates for 120ms upon closure to guarantee the click hits the exact desired pixel without drift.
+- **Drag & Drop**: Keeping the palm closed while moving executes continuous OS Mouse Drag.
+- **Release**: Opening the palm back up triggers OS Left Mouse Up.
 
 ---
 
@@ -194,17 +204,17 @@ pip install -e .
 # Run in Gesture / Sign Recognition mode
 python main.py
 
-# Run in Hand Mouse Controller mode
+# Run in Precision Palm Cursor mode
 python main.py --mouse
 ```
 
-### 8.2 Dedicated Hand Cursor Launcher (`run_cursor_control.py`)
+### 8.2 Dedicated Palm Cursor Launcher (`run_cursor_control.py`)
 ```bash
-# Launch cursor controller
+# Launch palm cursor controller
 python run_cursor_control.py
 
-# Launch with custom sensitivity and pinch distance
-python run_cursor_control.py --smooth 0.40 --pinch 35.0
+# Launch with custom speed gain and fist threshold
+python run_cursor_control.py --speed 1.50 --close-thresh 0.60
 ```
 
 ### Runtime Keyboard Controls
@@ -216,7 +226,6 @@ python run_cursor_control.py --smooth 0.40 --pinch 35.0
 | `s` | Toggle hand skeleton lines |
 | `b` | Toggle bounding boxes |
 | `f` | Toggle digit state indicators (`T:1 I:1 M:0 R:0 P:0`) |
-| `z` | Toggle active screen interaction zone boundary |
 
 ---
 
@@ -225,7 +234,7 @@ python run_cursor_control.py --smooth 0.40 --pinch 35.0
 Run the automated offline test suites:
 
 ```bash
-# Test Hand Cursor Controller
+# Test Precision Palm Cursor & 1 Euro Filter
 python tests/test_cursor_controller.py
 
 # Test Vision Subsystem

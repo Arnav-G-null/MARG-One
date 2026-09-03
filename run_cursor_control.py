@@ -1,6 +1,7 @@
 """
-MARG-One Vision-Based Hand Cursor Controller Application.
-Controls PC mouse cursor via index finger tracking and triggers left click via pinch.
+MARG-One Vision-Based Palm-Center Cursor Controller Application.
+Controls PC mouse cursor via anatomical palm tracking and triggers left click via closed palm (fist).
+Uses 1 Euro Filter for ultra-smooth, zero-jitter tracking.
 """
 
 import argparse
@@ -17,36 +18,37 @@ from marg_one.control import HandCursorController, CursorState
 
 
 def main():
-    parser = argparse.ArgumentParser(description="MARG-One Hand Cursor & Pinch-to-Click Controller")
-    parser.add_argument("--cam", type=int, default=0, help="Camera index (default: 0)")
+    parser = argparse.ArgumentParser(description="MARG-One Precision Palm-Center & Fist-Click Controller")
+    parser.add_argument("--cam", type=int, default=0, help="Camera device index (default: 0)")
     parser.add_argument("--width", type=int, default=1280, help="Frame width (default: 1280)")
     parser.add_argument("--height", type=int, default=720, help="Frame height (default: 720)")
-    parser.add_argument("--smooth", type=float, default=0.35, help="Cursor smoothing factor [0.1 - 0.8] (default: 0.35)")
-    parser.add_argument("--pinch", type=float, default=38.0, help="Pinch threshold in pixels (default: 38.0)")
-    parser.add_argument("--margin-x", type=float, default=0.0, help="Horizontal boundary margin (default: 0.0 for full frame)")
-    parser.add_argument("--margin-y", type=float, default=0.0, help="Vertical boundary margin (default: 0.0 for full frame)")
+    parser.add_argument("--speed", type=float, default=1.35, help="Cursor speed / reach gain multiplier (default: 1.35)")
+    parser.add_argument("--min-cutoff", type=float, default=0.8, help="1 Euro filter min cutoff frequency (default: 0.8)")
+    parser.add_argument("--beta", type=float, default=0.03, help="1 Euro filter speed coefficient (default: 0.03)")
+    parser.add_argument("--close-thresh", type=float, default=0.62, help="Fist closure threshold [0.5 - 0.8] (default: 0.62)")
     parser.add_argument("--no-flip", action="store_true", help="Disable mirror horizontal flip")
     parser.add_argument("--no-action", action="store_true", help="Disable actual OS mouse control (Telemetry preview only)")
     args = parser.parse_args()
 
-    print("=" * 68)
-    print("      MARG-ONE : HAND CURSOR & PINCH-TO-CLICK CONTROLLER     ")
-    print("=" * 68)
+    print("=" * 70)
+    print("      MARG-ONE : PRECISION PALM-CENTER & FIST-CLICK CONTROLLER       ")
+    print("=" * 70)
     print(f"[*] Camera Index:       {args.cam}")
     print(f"[*] Resolution:         {args.width}x{args.height}")
-    print(f"[*] Smoothing Factor:   {args.smooth}")
-    print(f"[*] Pinch Threshold:    {args.pinch} px")
+    print(f"[*] Speed Gain:         {args.speed}x")
+    print(f"[*] 1 Euro Filter:      min_cutoff={args.min_cutoff}, beta={args.beta}")
+    print(f"[*] Fist Threshold:     {args.close_thresh}")
     print(f"[*] Active Mouse Drive: {not args.no_action}")
     print(f"[*] Control Rules:")
-    print(f"    - Point Index Finger : Navigates PC cursor smoothly")
-    print(f"    - Pinch (Index+Thumb): Triggers Left Click / Drag")
-    print(f"    - Release Pinch      : Releases Left Click")
+    print(f"    - Open Palm         : Navigates PC cursor with ultra-stable palm center")
+    print(f"    - Close Palm (Fist) : Triggers Left Click (Locks position to prevent slip)")
+    print(f"    - Hold Fist & Move  : Executes continuous Mouse Drag & Drop")
+    print(f"    - Open Hand Back Up : Releases Left Click")
     print(f"[*] Keyboard Shortcuts:")
-    print(f"    - 'q' or ESC : Exit application")
+    print(f"    - 'q' or ESC : Exit application cleanly")
     print(f"    - 'm'        : Toggle active OS mouse control on/off")
-    print(f"    - 'z'        : Toggle active screen zone overlay")
-    print(f"    - 's'        : Toggle hand skeletons")
-    print("=" * 68)
+    print(f"    - 's'        : Toggle hand skeleton lines")
+    print("=" * 70)
 
     cap = cv2.VideoCapture(args.cam)
     if not cap.isOpened():
@@ -60,10 +62,10 @@ def main():
     tracker = DualHandTracker(num_hands=2, min_detection_confidence=0.5)
     visualizer = HandVisualizer()
     cursor_controller = HandCursorController(
-        margin_x=args.margin_x,
-        margin_y=args.margin_y,
-        smoothing_factor=args.smooth,
-        pinch_threshold=args.pinch,
+        speed_gain=args.speed,
+        min_cutoff=args.min_cutoff,
+        beta=args.beta,
+        click_close_threshold=args.close_thresh,
         enable_active_control=not args.no_action,
     )
 
@@ -81,7 +83,6 @@ def main():
             if not args.no_flip:
                 frame = cv2.flip(frame, 1)
 
-            # FPS calculation
             curr_time = time.time()
             dt = curr_time - prev_time
             prev_time = curr_time
@@ -92,33 +93,32 @@ def main():
             # 1. Track Hands
             hands = tracker.process_frame(frame)
 
-            # 2. Update Cursor Controller
-            telemetry = cursor_controller.update(hands, frame.shape)
+            # 2. Update Palm-Center Cursor Controller
+            telemetry = cursor_controller.update(hands, frame.shape, timestamp=curr_time)
             current_state = telemetry.get("state")
 
-            # Telemetry logging on state transition
+            # Console telemetry logging on state transition
             if current_state != last_state:
                 last_state = current_state
                 pos = telemetry.get("screen_pos")
-                print(f"[CURSOR STATE] {current_state} at Screen ({pos[0]}, {pos[1]}) | Pinch: {telemetry.get('pinch_distance')}px")
+                closure = int(telemetry.get("closure_score", 0.0) * 100)
+                print(f"[PALM MOUSE] State: {current_state:<12} | Screen: ({pos[0]:>4}, {pos[1]:>4}) | Fist Closure: {closure}%")
 
             # 3. Render Visual Feedback
             frame = visualizer.draw_skeleton(frame, hands)
             frame = visualizer.draw_cursor_overlay(frame, telemetry)
             frame = visualizer.draw_hud(frame, fps=fps, num_hands=len(hands), cursor_telemetry=telemetry)
 
-            cv2.imshow("MARG-One: Hand Cursor Controller", frame)
+            cv2.imshow("MARG-One: Precision Palm Mouse Controller", frame)
 
             key = cv2.waitKey(1) & 0xFF
             if key == ord('q') or key == 27:
-                print("[*] Exiting hand cursor controller...")
+                print("[*] Exiting palm cursor controller...")
                 break
             elif key in (ord('m'), ord('M')):
                 cursor_controller.enable_active_control = not cursor_controller.enable_active_control
                 status = "ENABLED" if cursor_controller.enable_active_control else "DISABLED (Preview Only)"
                 print(f"[*] Active OS mouse control: {status}")
-            elif key in (ord('z'), ord('Z')):
-                visualizer.show_interaction_box = not visualizer.show_interaction_box
             elif key in (ord('s'), ord('S')):
                 visualizer.show_skeleton = not visualizer.show_skeleton
 

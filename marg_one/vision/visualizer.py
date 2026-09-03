@@ -3,6 +3,7 @@ MARG-One Vision Subsystem: 3D Skeleton, Bounding Box, and Telemetry Visualizer.
 """
 
 from typing import List, Optional, Dict, Any, Tuple
+import math
 import cv2
 import numpy as np
 
@@ -30,10 +31,11 @@ class VisualizerTheme:
     RIGHT_BOX_COLOR = (50, 130, 255)
     RIGHT_TEXT_BG = (30, 90, 200)
 
-    # Interaction & Mouse Palette
-    CURSOR_NAV_COLOR = (255, 200, 0)       # Cyan/Yellow
-    CURSOR_CLICK_COLOR = (50, 255, 50)     # Neon Green (Active Click)
-    INTERACTION_BOX_COLOR = (120, 120, 140) # Subtle boundary
+    # Mouse & Palm Controller Palette
+    PALM_RETICLE_OPEN = (255, 210, 0)      # High-visibility Cyan/Aqua
+    PALM_RETICLE_CLOSED = (60, 255, 80)    # Neon Green on click
+    CLOSURE_RING_BG = (80, 80, 90)
+    CLOSURE_RING_ACTIVE = (60, 255, 80)
 
     # Telemetry HUD
     HUD_BG = (25, 25, 30)
@@ -45,7 +47,7 @@ class VisualizerTheme:
 
 class HandVisualizer:
     """
-    Renders 3D hand skeletons, topological landmarks, bounding boxes, cursor feedback, and HUD overlays.
+    Renders 3D hand skeletons, topological landmarks, bounding boxes, palm center reticles, and HUD overlays.
     """
 
     def __init__(
@@ -55,14 +57,12 @@ class HandVisualizer:
         show_bbox: bool = True,
         show_finger_status: bool = True,
         show_landmark_ids: bool = False,
-        show_interaction_box: bool = False,
     ):
         self.show_skeleton = show_skeleton
         self.show_landmarks = show_landmarks
         self.show_bbox = show_bbox
         self.show_finger_status = show_finger_status
         self.show_landmark_ids = show_landmark_ids
-        self.show_interaction_box = show_interaction_box
 
     def _get_hand_colors(self, handedness: str):
         if handedness.lower() == "left":
@@ -164,65 +164,74 @@ class HandVisualizer:
 
     def draw_cursor_overlay(self, frame: np.ndarray, telemetry: Dict[str, Any]) -> np.ndarray:
         """
-        Renders cursor interaction area, pinch line gauge, and active cursor indicators.
+        Renders palm center reticle, dynamic closure meter, and click/drag status.
         """
-        # 1. Active Interaction Box
-        if self.show_interaction_box and "interaction_box" in telemetry:
-            x1, y1, x2, y2 = telemetry["interaction_box"]
-            # Corner accents
-            corner_len = 20
-            box_col = VisualizerTheme.INTERACTION_BOX_COLOR
-            cv2.rectangle(frame, (x1, y1), (x2, y2), box_col, 1, cv2.LINE_AA)
+        palm_center = telemetry.get("palm_center_px")
+        if palm_center is None:
+            return frame
 
-            # Draw corners for modern aesthetic
-            for cx, cy, dx, dy in [(x1, y1, 1, 1), (x2, y1, -1, 1), (x1, y2, 1, -1), (x2, y2, -1, -1)]:
-                cv2.line(frame, (cx, cy), (cx + dx * corner_len, cy), (220, 220, 240), 2, cv2.LINE_AA)
-                cv2.line(frame, (cx, cy), (cx, cy + dy * corner_len), (220, 220, 240), 2, cv2.LINE_AA)
+        cx, cy = palm_center
+        is_closed = telemetry.get("is_closed", False)
+        closure_score = telemetry.get("closure_score", 0.0)
+        is_locked = telemetry.get("is_locked", False)
+        state = telemetry.get("state", "IDLE")
 
-            cv2.putText(
+        reticle_color = VisualizerTheme.PALM_RETICLE_CLOSED if is_closed else VisualizerTheme.PALM_RETICLE_OPEN
+        radius = 24
+
+        # 1. Outer Background Arc
+        cv2.circle(frame, (cx, cy), radius, VisualizerTheme.CLOSURE_RING_BG, 3, cv2.LINE_AA)
+
+        # 2. Dynamic Closure Gauge (Arc indicating how close to a fist the hand is)
+        angle_end = int(closure_score * 360)
+        if angle_end > 0:
+            cv2.ellipse(
                 frame,
-                "SCREEN ACTIVE ZONE",
-                (x1 + 6, y1 + 16),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.38,
-                (180, 180, 200),
-                1,
+                (cx, cy),
+                (radius, radius),
+                -90,
+                0,
+                angle_end,
+                VisualizerTheme.CLOSURE_RING_ACTIVE if is_closed else (255, 230, 50),
+                4,
                 cv2.LINE_AA,
             )
 
-        # 2. Pinch Gauge & Index Indicator
-        raw_index = telemetry.get("raw_index_pos")
-        raw_thumb = telemetry.get("raw_thumb_pos")
-        is_pinched = telemetry.get("is_pinched", False)
-        state = telemetry.get("state", "IDLE")
+        # 3. Center Target Dot & Crosshairs
+        cv2.circle(frame, (cx, cy), 6, reticle_color, -1, cv2.LINE_AA)
+        cv2.circle(frame, (cx, cy), 7, (20, 20, 20), 1, cv2.LINE_AA)
 
-        if raw_index is not None:
-            # Highlight index fingertip as cursor driver
-            ind_color = VisualizerTheme.CURSOR_CLICK_COLOR if is_pinched else VisualizerTheme.CURSOR_NAV_COLOR
-            cv2.circle(frame, raw_index, 10, ind_color, 2, cv2.LINE_AA)
-            cv2.circle(frame, raw_index, 4, ind_color, -1, cv2.LINE_AA)
+        # Crosshair lines
+        line_len = 8
+        cv2.line(frame, (cx - radius - line_len, cy), (cx - radius + 2, cy), reticle_color, 2, cv2.LINE_AA)
+        cv2.line(frame, (cx + radius - 2, cy), (cx + radius + line_len, cy), reticle_color, 2, cv2.LINE_AA)
+        cv2.line(frame, (cx, cy - radius - line_len), (cx, cy - radius + 2), reticle_color, 2, cv2.LINE_AA)
+        cv2.line(frame, (cx, cy + radius - 2), (cx, cy + radius + line_len), reticle_color, 2, cv2.LINE_AA)
 
-            if raw_thumb is not None:
-                # Line between index and thumb
-                line_color = VisualizerTheme.CURSOR_CLICK_COLOR if is_pinched else (100, 200, 255)
-                line_thickness = 3 if is_pinched else 1
-                cv2.line(frame, raw_index, raw_thumb, line_color, line_thickness, cv2.LINE_AA)
+        # 4. Status Tag near Reticle
+        status_text = "CLICK / DRAG" if is_closed else "NAVIGATING"
+        if is_locked:
+            status_text = "CLICK [LOCKED]"
 
-                # Distance text indicator
-                p_dist = telemetry.get("pinch_distance", 0.0)
-                mid_x = (raw_index[0] + raw_thumb[0]) // 2
-                mid_y = (raw_index[1] + raw_thumb[1]) // 2
-                dist_label = f"{p_dist}px"
-                cv2.putText(
-                    frame,
-                    dist_label,
-                    (mid_x + 8, mid_y),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.38,
-                    (255, 255, 255),
-                    1,
-                    cv2.LINE_AA,
-                )
+        (tw, th), _ = cv2.getTextSize(status_text, cv2.FONT_HERSHEY_SIMPLEX, 0.42, 1)
+        tag_bg = (30, 140, 40) if is_closed else (40, 40, 55)
+        cv2.rectangle(
+            frame,
+            (cx - tw // 2 - 4, cy + radius + 6),
+            (cx + tw // 2 + 4, cy + radius + th + 10),
+            tag_bg,
+            -1,
+        )
+        cv2.putText(
+            frame,
+            status_text,
+            (cx - tw // 2, cy + radius + th + 8),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.42,
+            (255, 255, 255),
+            1,
+            cv2.LINE_AA,
+        )
 
         return frame
 
@@ -272,26 +281,27 @@ class HandVisualizer:
             cv2.LINE_AA,
         )
 
-        # Mouse / Cursor Status Badge (if active)
+        # Mouse / Cursor Status Badge
         if cursor_telemetry:
             c_state = cursor_telemetry.get("state", "IDLE")
             pos = cursor_telemetry.get("screen_pos", (0, 0))
-            is_click = cursor_telemetry.get("is_pinched", False)
+            is_closed = cursor_telemetry.get("is_closed", False)
+            closure = int(cursor_telemetry.get("closure_score", 0.0) * 100)
             hand_lbl = cursor_telemetry.get("active_hand", "None")
 
-            badge_col = VisualizerTheme.ACCENT_GREEN if is_click else (VisualizerTheme.ACCENT_PURPLE if c_state == "MOVING" else (100, 100, 110))
-            status_text = f"Cursor: ({pos[0]}, {pos[1]}) | [{c_state}] | Hand: {hand_lbl}"
+            badge_col = VisualizerTheme.ACCENT_GREEN if is_closed else (VisualizerTheme.ACCENT_PURPLE if c_state == "MOVING" else (100, 100, 110))
+            status_text = f"Cursor: ({pos[0]}, {pos[1]}) | [{c_state}] | Fist: {closure}% | Hand: {hand_lbl}"
 
-            (tw, th), _ = cv2.getTextSize(status_text, cv2.FONT_HERSHEY_SIMPLEX, 0.55, 2)
+            (tw, th), _ = cv2.getTextSize(status_text, cv2.FONT_HERSHEY_SIMPLEX, 0.52, 2)
             bx = max(300, w // 2 - tw // 2)
             cv2.rectangle(frame, (bx - 10, 10), (bx + tw + 10, 46), (40, 40, 52), -1)
-            cv2.rectangle(frame, (bx - 10, 10), (bx + tw + 10, 46), badge_col, 2 if is_click else 1)
+            cv2.rectangle(frame, (bx - 10, 10), (bx + tw + 10, 46), badge_col, 2 if is_closed else 1)
             cv2.putText(
                 frame,
                 status_text,
                 (bx, 34),
                 cv2.FONT_HERSHEY_SIMPLEX,
-                0.55,
+                0.52,
                 (255, 255, 255),
                 2,
                 cv2.LINE_AA,
@@ -320,7 +330,7 @@ class HandVisualizer:
         else:
             cv2.putText(
                 frame,
-                "Ready for Gestures / Mouse Control...",
+                "Ready for Gestures / Palm Mouse Control...",
                 (320, 35),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.55,
@@ -330,13 +340,13 @@ class HandVisualizer:
             )
 
         # Bottom help status bar
-        controls_text = "[Q: Quit]  [M: Toggle Mouse Control]  [S: Skeleton]  [B: BBox]  [F: Fingers]  [Z: Active Zone]"
+        controls_text = "[Q: Quit]  [M: Toggle Mouse Control]  [S: Skeleton]  [B: BBox]  [F: Fingers]  [Open Palm: Move | Fist: Click/Drag]"
         cv2.putText(
             frame,
             controls_text,
             (16, h - 14),
             cv2.FONT_HERSHEY_SIMPLEX,
-            0.40,
+            0.38,
             (180, 180, 190),
             1,
             cv2.LINE_AA,
